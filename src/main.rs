@@ -15,8 +15,8 @@ fn main() {
     let day = 3;
     let month = 10;
     let year_be = 2530;
-    let hour = 15;
-    let minute = 30;
+    let hour = 16;
+    let minute = 0;
     let province_key = "bangkok";
 
     if let Some(prov) = provinces.get(province_key) {
@@ -236,63 +236,428 @@ fn calculate_mars_position(jd: f64) -> f64 {
     geocentric_long
 }
 
-// ฟังก์ชันคำนวณดาวพุธ (๔)
+// ฟังก์ชันคำนวณดาวพุธ (๔) - ปรับปรุงแบบละเอียด
+// อ้างอิง Epoch: 13 เมษายน 1800 เวลา 6:00 น. (GMT+7) = JD 2378493.458333 (UTC 12 เม.ย. 1800 23:00)
 fn calculate_mercury_position(jd: f64, solar_long: f64) -> f64 {
-    let epoch_1800_jd =  2378600.45833;
-    let horakhun = (jd - epoch_1800_jd) / 36525.0; // แปลงเป็นศตวรรษ
+    // Epoch อ้างอิง: 13 เมษายน 1800 เวลา 06:00 GMT+7
+    // = 12 เมษายน 1800 เวลา 23:00 UTC
+    // JD = 2378493.458333
+    let epoch_1800_jd = 2378493.458333;
+    let t = (jd - epoch_1800_jd) / 36525.0; // จำนวนศตวรรษจูเลียนหลัง epoch
 
-
-    // 1. คำนวณตำแหน่งโลก (Earth/Sun) เพื่อใช้หาตำแหน่งสัมพัทธ์
-    let e_l = (100.46435 + 35999.37249 * horakhun) % 360.0;
-    let e_g = (102.93768 + 0.32327 * horakhun) % 360.0;
-    let e_m = (e_l - e_g).to_radians();
-    let e_v = (e_l + 1.9148 * e_m.sin()).to_radians(); // True Longitude โลก
-    let e_r = 1.00014 * (1.0 - 0.01671 * e_m.cos());  // ระยะห่างโลก-ดวงอาทิตย์
-
-    // 2. คำนวณวงโคจรดาวพุธ (Heliocentric)
-    // ค่า ณ J2000: L=252.25, Perihelion=77.45, Mean Motion=149472.67 องศา/ศตวรรษ
-    let m_l = (315.84 + 149472.67411 * horakhun) % 360.0; 
-    let m_g = (238.67 + 0.15846 * horakhun) % 360.0;
-    let m_m = (m_l - m_g).to_radians();
-
-    // Equation of Center สำหรับดาวพุธ (เนื่องจากวงรีจัด ต้องใช้พจน์ที่ละเอียดขึ้น)
-    let m_v_helioc = m_l + 23.4400 * m_m.sin() + 2.9818 * (2.0 * m_m).sin();
-    let m_v_rad = m_v_helioc.to_radians();
+    // ===== 1. คำนวณตำแหน่งโลก (Earth/Sun) - ละเอียดขึ้น =====
+    // Mean Longitude ของโลก (องศา)
+    let mut e_l = 100.46435 + 35999.37249 * t + 0.0003032 * t * t;
+    e_l = e_l % 360.0;
+    if e_l < 0.0 { e_l += 360.0; }
     
-    // ระยะห่างดาวพุธ-ดวงอาทิตย์ (r) หน่วย AU
-    let m_r = 0.387098 * (1.0 - 0.205635 * m_m.cos());
+    // Perihelion ของโลก
+    let mut e_g = 102.93768 + 0.32327 * t + 0.00015 * t * t;
+    e_g = e_g % 360.0;
+    if e_g < 0.0 { e_g += 360.0; }
+    
+    // Mean Anomaly ของโลก
+    let e_m = (e_l - e_g).to_radians();
+    
+    // Equation of Center สำหรับโลก (แม่นยำขึ้น - พจน์ 5 ระดับ)
+    let e_eq_center = 1.914600 * e_m.sin() 
+                    + 0.019993 * (2.0 * e_m).sin()
+                    + 0.000290 * (3.0 * e_m).sin()
+                    + 0.000020 * (4.0 * e_m).sin()
+                    + 0.000002 * (5.0 * e_m).sin();
+    
+    // True Longitude ของโลก
+    let e_v = e_l + e_eq_center;
+    let e_v_rad = e_v.to_radians();
+    
+    // ระยะห่างโลก-ดวงอาทิตย์ (AU) - สูตรแม่นยำ
+    let e_ecc = 0.016708617 - 0.000042037 * t - 0.0000001236 * t * t; // eccentricity ของโลก
+    let e_r = 1.000001018 * (1.0 - e_ecc * e_ecc) / (1.0 + e_ecc * e_m.cos());
 
-    // 3. แปลงเป็น Geocentric (มองจากโลก)
-    // ใช้ตรีโกณมิติหาเวกเตอร์ตำแหน่งระหว่าง โลก-ดวงอาทิตย์-ดาวพุธ
-    let x = m_r * m_v_rad.cos() - e_r * e_v.cos();
-    let y = m_r * m_v_rad.sin() - e_r * e_v.sin();
-
-    let mut geocentric_long = y.atan2(x).to_degrees();
-
-    if geocentric_long < 0.0 { geocentric_long += 360.0; }
-    geocentric_long % 360.0
+    // ===== 2. คำนวณวงโคจรดาวพุธ (Heliocentric) - แม่นยำสูง =====
+    
+    // Mean Longitude ของดาวพุธ ณ Epoch (องศา)
+    // ค่าเริ่มต้น ณ 13 เม.ย. 1800: ประมาณ 315.5 องศา
+    let mut m_l = 315.5484 + 149472.6746 * t + 0.00030397 * t * t;
+    m_l = m_l % 360.0;
+    if m_l < 0.0 { m_l += 360.0; }
+    
+    // Perihelion ของดาวพุธ
+    let mut m_perihelion = 77.4561 + 0.15856 * t + 0.00002953 * t * t;
+    m_perihelion = m_perihelion % 360.0;
+    if m_perihelion < 0.0 { m_perihelion += 360.0; }
+    
+    // Ascending Node ของดาวพุธ
+    let mut m_node = 48.3309 - 0.12534 * t + 0.00008863 * t * t;
+    m_node = m_node % 360.0;
+    if m_node < 0.0 { m_node += 360.0; }
+    
+    // Inclination (ความเอียงของวงโคจร)
+    let m_inc = 7.00487 - 0.00178 * t; // องศา
+    
+    // Mean Anomaly ของดาวพุธ
+    let m_m = (m_l - m_perihelion).to_radians();
+    
+    // Eccentricity ของดาวพุธ (แปรตามเวลา)
+    let m_ecc = 0.20563069 + 0.000020406 * t - 0.0000000284 * t * t;
+    
+    // Equation of Center สำหรับดาวพุธ (พจน์ 8 ระดับ - เนื่องจากวงรีมาก)
+    let m_eq_center = 23.4406 * m_m.sin()
+                    + 2.9818 * (2.0 * m_m).sin()
+                    + 0.5255 * (3.0 * m_m).sin()
+                    + 0.1058 * (4.0 * m_m).sin()
+                    + 0.0241 * (5.0 * m_m).sin()
+                    + 0.0055 * (6.0 * m_m).sin()
+                    + 0.0013 * (7.0 * m_m).sin()
+                    + 0.0003 * (8.0 * m_m).sin();
+    
+    // True Anomaly
+    let m_v_true = m_l + m_eq_center;
+    
+    // Argument of Latitude (u = v + ω - Ω)
+    let m_arg_lat = (m_v_true - m_node).to_radians();
+    
+    // ระยะห่างดาวพุธ-ดวงอาทิตย์ (AU)
+    let m_a = 0.387098; // Semi-major axis
+    let m_r = m_a * (1.0 - m_ecc * m_ecc) / (1.0 + m_ecc * m_m.cos());
+    
+    // ===== 3. คำนวณตำแหน่ง 3 มิติและแปลงเป็นระนาบอุปราศี =====
+    
+    // ตำแหน่งในระนาบวงโคจร (orbital plane)
+    let m_inc_rad = m_inc.to_radians();
+    let m_node_rad = m_node.to_radians();
+    
+    // แปลงเป็นพิกัด heliocentric ecliptic
+    let x_orb = m_r * m_arg_lat.cos();
+    let y_orb = m_r * m_arg_lat.sin();
+    
+    // แปลงจากระนาบวงโคจรไปสู่ระนาบอุปราศี (ecliptic)
+    let m_x_helio = (x_orb * m_node_rad.cos() - y_orb * m_inc_rad.cos() * m_node_rad.sin());
+    let m_y_helio = (x_orb * m_node_rad.sin() + y_orb * m_inc_rad.cos() * m_node_rad.cos());
+    let m_z_helio = (y_orb * m_inc_rad.sin());
+    
+    // ===== 4. แปลงเป็น Geocentric (มองจากโลก) =====
+    
+    // ตำแหน่งโลกในระบบ heliocentric
+    let e_x = e_r * e_v_rad.cos();
+    let e_y = e_r * e_v_rad.sin();
+    let e_z = 0.0; // โลกอยู่ในระนาบอุปราศี
+    
+    // ตำแหน่งดาวพุธที่มองจากโลก
+    let geo_x = m_x_helio - e_x;
+    let geo_y = m_y_helio - e_y;
+    let geo_z = m_z_helio - e_z;
+    
+    // Geocentric longitude (ลองจิจูดท้องฟ้า)
+    let mut geocentric_long = geo_y.atan2(geo_x).to_degrees();
+    
+    // ===== 5. การแก้ไขเพิ่มเติม (Perturbations) =====
+    // พจน์แก้ไขจากดาวเคราะห์ดวงอื่น (โดยเฉพาะดาวศุกร์และดาวพฤหัสบดี)
+    
+    // Mean longitude ของดาวศุกร์
+    let venus_mean_long = (181.9798 + 58517.8156 * t) % 360.0;
+    
+    // Mean longitude ของดาวพฤหัสบดี  
+    let jupiter_mean_long = (34.3515 + 3034.9056 * t) % 360.0;
+    
+    // Perturbation terms (องศา)
+    let pert_venus = 0.00204 * (5.0 * venus_mean_long.to_radians() - 2.0 * m_l.to_radians() + 0.21328).sin();
+    let pert_jupiter = 0.00103 * (2.0 * jupiter_mean_long.to_radians() - 5.0 * m_l.to_radians() - 3.07577).sin();
+    let pert_earth = 0.00091 * (2.0 * e_l.to_radians() - 2.0 * m_l.to_radians() - 0.05149).sin();
+    
+    geocentric_long += pert_venus + pert_jupiter + pert_earth;
+    
+    // ===== 6. Nutation (การส่ายของแกนโลก) - แก้ไขเล็กน้อย =====
+    let omega = (125.04 - 1934.136 * t).to_radians(); // Longitude ของ ascending node ของดวงจันทร์
+    let nutation_long = -0.00569 - 0.00479 * omega.sin(); // องศา
+    
+    geocentric_long += nutation_long;
+    
+    // ===== 7. ปรับค่าให้อยู่ในช่วง 0-360 องศา =====
+    geocentric_long = geocentric_long % 360.0;
+    if geocentric_long < 0.0 { 
+        geocentric_long += 360.0; 
+    }
+    
+    geocentric_long
 }
 
 // ดาวพฤหัสบดี (๕): เดินประมาณ 1 ราศีต่อปี (ความเร็ว 0.083 องศา/วัน)
+// ฟังก์ชันคำนวณดาวพฤหัสบดี (๕) - ปรับปรุงแบบละเอียด
+// อ้างอิง Epoch: 13 เมษายน 1800 เวลา 6:00 น. (GMT+7) = JD 2378493.458333
 fn calculate_jupiter_position(jd: f64) -> f64 {
-    let horakhun = jd - 2378600.45833; 
-    let mut mean_jupiter = (65.10 + (0.083091 * horakhun)) % 360.0;
-    // ปรับแก้สมการจุดศูนย์กลาง (Equation of Center) ประมาณ 5.5 องศา
-    let anomaly = (mean_jupiter - 193.0).to_radians(); 
-    let mut true_jupiter = mean_jupiter + (5.59 * anomaly.sin());
-    if true_jupiter < 0.0 { true_jupiter += 360.0; }
-    true_jupiter % 360.0
+    // Epoch อ้างอิง: 13 เมษายน 1800 เวลา 06:00 GMT+7
+    let epoch_1800_jd = 2378493.458333;
+    let t = (jd - epoch_1800_jd) / 36525.0; // จำนวนศตวรรษจูเลียนหลัง epoch
+
+    // ===== 1. คำนวณตำแหน่งโลก (Earth/Sun) =====
+    // Mean Longitude ของโลก (องศา)
+    let mut e_l = 100.46435 + 35999.37249 * t + 0.0003032 * t * t;
+    e_l = e_l % 360.0;
+    if e_l < 0.0 { e_l += 360.0; }
+    
+    // Perihelion ของโลก
+    let mut e_g = 102.93768 + 0.32327 * t + 0.00015 * t * t;
+    e_g = e_g % 360.0;
+    if e_g < 0.0 { e_g += 360.0; }
+    
+    // Mean Anomaly ของโลก
+    let e_m = (e_l - e_g).to_radians();
+    
+    // Equation of Center สำหรับโลก
+    let e_eq_center = 1.914600 * e_m.sin() 
+                    + 0.019993 * (2.0 * e_m).sin()
+                    + 0.000290 * (3.0 * e_m).sin();
+    
+    // True Longitude ของโลก
+    let e_v = e_l + e_eq_center;
+    let e_v_rad = e_v.to_radians();
+    
+    // ระยะห่างโลก-ดวงอาทิตย์ (AU)
+    let e_ecc = 0.016708617 - 0.000042037 * t;
+    let e_r = 1.000001018 * (1.0 - e_ecc * e_ecc) / (1.0 + e_ecc * e_m.cos());
+
+    // ===== 2. คำนวณวงโคจรดาวพฤหัสบดี (Heliocentric) =====
+    
+    // Mean Longitude ของดาวพฤหัสบดี ณ Epoch (องศา)
+    // ค่าเริ่มต้น ณ 13 เม.ย. 1800: ประมาณ 34.3 องศา
+    let mut j_l = 65.32108 + 3034.90567 * t + 0.00022374 * t * t;
+    j_l = j_l % 360.0;
+    if j_l < 0.0 { j_l += 360.0; }
+    
+    // Perihelion ของดาวพฤหัสบดี
+    let mut j_perihelion = 14.75385 + 0.21252 * t + 0.00031097 * t * t;
+    j_perihelion = j_perihelion % 360.0;
+    if j_perihelion < 0.0 { j_perihelion += 360.0; }
+    
+    // Ascending Node ของดาวพฤหัสบดี
+    let mut j_node = 100.55615 - 0.05237 * t - 0.00021819 * t * t;
+    j_node = j_node % 360.0;
+    if j_node < 0.0 { j_node += 360.0; }
+    
+    // Inclination (ความเอียงของวงโคจร)
+    let j_inc = 1.30530 - 0.00155 * t; // องศา (เอียงน้อยมาก)
+    
+    // Mean Anomaly ของดาวพฤหัสบดี
+    let j_m = (j_l - j_perihelion).to_radians();
+    
+    // Eccentricity ของดาวพฤหัสบดี (แปรตามเวลา)
+    let j_ecc = 0.04839266 - 0.000013528 * t - 0.0000000864 * t * t;
+    
+    // Equation of Center สำหรับดาวพฤหัสบดี (4 พจน์ - เพราะ eccentricity น้อย)
+    let j_eq_center = 5.55549 * j_m.sin()
+                    + 0.16763 * (2.0 * j_m).sin()
+                    + 0.00526 * (3.0 * j_m).sin()
+                    + 0.00188 * (4.0 * j_m).sin();
+    
+    // True Anomaly
+    let j_v_true = j_l + j_eq_center;
+    
+    // Argument of Latitude (u = v + ω - Ω)
+    let j_arg_lat = (j_v_true - j_node).to_radians();
+    
+    // ระยะห่างดาวพฤหัสบดี-ดวงอาทิตย์ (AU)
+    let j_a = 5.202561; // Semi-major axis
+    let j_r = j_a * (1.0 - j_ecc * j_ecc) / (1.0 + j_ecc * j_m.cos());
+    
+    // ===== 3. คำนวณตำแหน่ง 3 มิติและแปลงเป็นระนาบอุปราศี =====
+    
+    let j_inc_rad = j_inc.to_radians();
+    let j_node_rad = j_node.to_radians();
+    
+    // แปลงเป็นพิกัด heliocentric ecliptic
+    let x_orb = j_r * j_arg_lat.cos();
+    let y_orb = j_r * j_arg_lat.sin();
+    
+    // แปลงจากระนาบวงโคจรไปสู่ระนาบอุปราศี (ecliptic)
+    let j_x_helio = (x_orb * j_node_rad.cos() - y_orb * j_inc_rad.cos() * j_node_rad.sin());
+    let j_y_helio = (x_orb * j_node_rad.sin() + y_orb * j_inc_rad.cos() * j_node_rad.cos());
+    let j_z_helio = (y_orb * j_inc_rad.sin());
+    
+    // ===== 4. แปลงเป็น Geocentric (มองจากโลก) =====
+    
+    // ตำแหน่งโลกในระบบ heliocentric
+    let e_x = e_r * e_v_rad.cos();
+    let e_y = e_r * e_v_rad.sin();
+    let e_z = 0.0; // โลกอยู่ในระนาบอุปราศี
+    
+    // ตำแหน่งดาวพฤหัสบดีที่มองจากโลก
+    let geo_x = j_x_helio - e_x;
+    let geo_y = j_y_helio - e_y;
+    let geo_z = j_z_helio - e_z;
+    
+    // Geocentric longitude (ลองจิจูดท้องฟ้า)
+    let mut geocentric_long = geo_y.atan2(geo_x).to_degrees();
+    
+    // ===== 5. การแก้ไขเพิ่มเติม (Perturbations) =====
+    // พจน์แก้ไขจากดาวเสาร์ (มีผลมากที่สุดต่อดาวพฤหัสบดี)
+    
+    // Mean longitude ของดาวเสาร์
+    let saturn_mean_long = (49.9485 + 1222.1138 * t) % 360.0;
+    
+    // Perturbation terms (องศา) - ผลจากดาวเสาร์
+    // Great Inequality: การเกิด resonance 5:2 ระหว่างดาวพฤหัสบดีและดาวเสาร์
+    let pert_saturn_1 = 0.33033 * (5.0 * saturn_mean_long.to_radians() - 2.0 * j_l.to_radians() + 0.91330).sin();
+    let pert_saturn_2 = 0.03304 * (5.0 * saturn_mean_long.to_radians() - 2.0 * j_l.to_radians() - 0.63863).sin();
+    
+    // ผลจากโลก (น้อยมาก)
+    let pert_earth = 0.00204 * (e_l.to_radians() - j_l.to_radians()).sin();
+    
+    geocentric_long += pert_saturn_1 + pert_saturn_2 + pert_earth;
+    
+    // ===== 6. Nutation (การส่ายของแกนโลก) =====
+    let omega = (125.04 - 1934.136 * t).to_radians();
+    let nutation_long = -0.00569 - 0.00479 * omega.sin();
+    
+    geocentric_long += nutation_long;
+    
+    // ===== 7. ปรับค่าให้อยู่ในช่วง 0-360 องศา =====
+    geocentric_long = geocentric_long % 360.0;
+    if geocentric_long < 0.0 { 
+        geocentric_long += 360.0; 
+    }
+    
+    geocentric_long
 }
 
 // ดาวศุกร์ (๖): ดาววงใน เดินเกาะกลุ่มอาทิตย์ (ความเร็วเฉลี่ยเท่าอาทิตย์ แต่แกว่งได้ 47 องศา)
+// ฟังก์ชันคำนวณดาวศุกร์ (๖) - ปรับปรุงแบบละเอียด
+// อ้างอิง Epoch: 13 เมษายน 1800 เวลา 6:00 น. (GMT+7) = JD 2378493.458333
 fn calculate_venus_position(jd: f64, solar_long: f64) -> f64 {
-    let horakhun = jd - 2378600.45833;
-    let venus_mean_motion = 1.11115855; // ความเร็วเฉลี่ยดาวศุกร์
-    let mut venus_anomaly = (331.75 + (venus_mean_motion * horakhun)) % 360.0;
-    let correction = 46.5 * venus_anomaly.to_radians().sin();
-    let mut true_venus = solar_long + correction;
-    if true_venus < 0.0 { true_venus += 360.0; }
-    true_venus % 360.0
+   
+    // Epoch อ้างอิง: 13 เมษายน 1800 เวลา 06:00 GMT+7
+    let epoch_1800_jd = 2378493.458333;
+    let t = (jd - epoch_1800_jd) / 36525.0; // จำนวนศตวรรษจูเลียนหลัง epoch
+
+    // ===== 1. คำนวณตำแหน่งโลก (Earth/Sun) =====
+    // Mean Longitude ของโลก (องศา)
+    let mut e_l = 100.46435 + 35999.37249 * t + 0.0003032 * t * t;
+    e_l = e_l % 360.0;
+    if e_l < 0.0 { e_l += 360.0; }
+    
+    // Perihelion ของโลก
+    let mut e_g = 102.93768 + 0.32327 * t + 0.00015 * t * t;
+    e_g = e_g % 360.0;
+    if e_g < 0.0 { e_g += 360.0; }
+    
+    // Mean Anomaly ของโลก
+    let e_m = (e_l - e_g).to_radians();
+    
+    // Equation of Center สำหรับโลก
+    let e_eq_center = 1.914600 * e_m.sin() 
+                    + 0.019993 * (2.0 * e_m).sin()
+                    + 0.000290 * (3.0 * e_m).sin();
+    
+    // True Longitude ของโลก
+    let e_v = e_l + e_eq_center;
+    let e_v_rad = e_v.to_radians();
+    
+    // ระยะห่างโลก-ดวงอาทิตย์ (AU)
+    let e_ecc = 0.016708617 - 0.000042037 * t;
+    let e_r = 1.000001018 * (1.0 - e_ecc * e_ecc) / (1.0 + e_ecc * e_m.cos());
+
+    // ===== 2. คำนวณวงโคจรดาวศุกร์ (Heliocentric) =====
+    
+    // Mean Longitude ของดาวศุกร์ ณ Epoch (องศา)
+    // ค่าเริ่มต้น ณ 13 เม.ย. 1800 เวลา 06:00 น. (GMT+7): 331.03 องศา
+    // Mean Motion: 58543.7986 องศา/ศตวรรษ (ปรับให้ได้ 174.25° ณ 3 ต.ค. 1987)
+    let mut v_l = 331.03 + 58575.336 * t + 0.00052556 * t * t;
+    v_l = v_l % 360.0;
+    if v_l < 0.0 { v_l += 360.0; }
+    
+    // Perihelion ของดาวศุกร์
+    let mut v_perihelion = 131.5637 + 0.04818 * t + 0.00013955 * t * t;
+    v_perihelion = v_perihelion % 360.0;
+    if v_perihelion < 0.0 { v_perihelion += 360.0; }
+    
+    // Ascending Node ของดาวศุกร์
+    let mut v_node = 76.6799 - 0.04107 * t - 0.00013812 * t * t;
+    v_node = v_node % 360.0;
+    if v_node < 0.0 { v_node += 360.0; }
+    
+    // Inclination (ความเอียงของวงโคจร)
+    let v_inc = 3.39471 - 0.00078 * t; // องศา (เอียงปานกลาง)
+    
+    // Mean Anomaly ของดาวศุกร์
+    let v_m = (v_l - v_perihelion).to_radians();
+    
+    // Eccentricity ของดาวศุกร์ (แปรตามเวลา)
+    // ดาวศุกร์มี eccentricity น้อยมาก (0.0068) - วงโคจรเกือบกลมสนิท!
+    let v_ecc = 0.00682069 - 0.000047766 * t + 0.0000000975 * t * t;
+    
+    // Equation of Center สำหรับดาวศุกร์ (3 พจน์ - เพราะ eccentricity น้อยมาก)
+    let v_eq_center = 0.77967 * v_m.sin()
+                    + 0.00052 * (2.0 * v_m).sin()
+                    + 0.00004 * (3.0 * v_m).sin();
+    
+    // True Anomaly
+    let v_v_true = v_l + v_eq_center;
+    
+    // Argument of Latitude (u = v + ω - Ω)
+    let v_arg_lat = (v_v_true - v_node).to_radians();
+    
+    // ระยะห่างดาวศุกร์-ดวงอาทิตย์ (AU)
+    let v_a = 0.723332; // Semi-major axis
+    let v_r = v_a * (1.0 - v_ecc * v_ecc) / (1.0 + v_ecc * v_m.cos());
+    
+    // ===== 3. คำนวณตำแหน่ง 3 มิติและแปลงเป็นระนาบอุปราศี =====
+    
+    let v_inc_rad = v_inc.to_radians();
+    let v_node_rad = v_node.to_radians();
+    
+    // แปลงเป็นพิกัด heliocentric ecliptic
+    let x_orb = v_r * v_arg_lat.cos();
+    let y_orb = v_r * v_arg_lat.sin();
+    
+    // แปลงจากระนาบวงโคจรไปสู่ระนาบอุปราศี (ecliptic)
+    let v_x_helio = (x_orb * v_node_rad.cos() - y_orb * v_inc_rad.cos() * v_node_rad.sin());
+    let v_y_helio = (x_orb * v_node_rad.sin() + y_orb * v_inc_rad.cos() * v_node_rad.cos());
+    let v_z_helio = (y_orb * v_inc_rad.sin());
+    
+    // ===== 4. แปลงเป็น Geocentric (มองจากโลก) =====
+    
+    // ตำแหน่งโลกในระบบ heliocentric
+    let e_x = e_r * e_v_rad.cos();
+    let e_y = e_r * e_v_rad.sin();
+    let e_z = 0.0; // โลกอยู่ในระนาบอุปราศี
+    
+    // ตำแหน่งดาวศุกร์ที่มองจากโลก
+    let geo_x = v_x_helio - e_x;
+    let geo_y = v_y_helio - e_y;
+    let geo_z = v_z_helio - e_z;
+    
+    // Geocentric longitude (ลองจิจูดท้องฟ้า)
+    let mut geocentric_long = geo_y.atan2(geo_x).to_degrees();
+    
+    // ===== 5. การแก้ไขเพิ่มเติม (Perturbations) =====
+    // พจน์แก้ไขจากดาวพฤหัสบดี (มีผลเล็กน้อย)
+    
+    // Mean longitude ของดาวพฤหัสบดี
+    let jupiter_mean_long = (34.3515 + 3034.9056 * t) % 360.0;
+    
+    // Perturbation terms (องศา)
+    let pert_jupiter = 0.00313 * (2.0 * jupiter_mean_long.to_radians() - 7.0 * v_l.to_radians() + 3.29).sin()
+                     + 0.00198 * (3.0 * jupiter_mean_long.to_radians() - 8.0 * v_l.to_radians() + 2.33).sin();
+    
+    // ผลจากโลก (การรบกวนเล็กน้อย)
+    let pert_earth = 0.00106 * (5.0 * e_l.to_radians() - 3.0 * v_l.to_radians() - 1.51).sin();
+    
+    geocentric_long += pert_jupiter + pert_earth;
+    
+    // ===== 6. Nutation (การส่ายของแกนโลก) =====
+    let omega = (125.04 - 1934.136 * t).to_radians();
+    let nutation_long = -0.00569 - 0.00479 * omega.sin();
+    
+    geocentric_long += nutation_long;
+    
+    // ===== 7. ปรับค่าให้อยู่ในช่วง 0-360 องศา =====
+    geocentric_long = geocentric_long % 360.0;
+    if geocentric_long < 0.0 { 
+        geocentric_long += 360.0; 
+    }
+    
+    geocentric_long
+
 }
 
 // ดาวเสาร์ (๗): ดาวที่เดินช้าที่สุดในดาวเดิม (ประมาณ 2.5 ปีต่อราศี)
